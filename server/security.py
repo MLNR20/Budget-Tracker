@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -6,6 +8,7 @@ from pwdlib import PasswordHash
 from config import ACCESS_TOKEN_EXPIRE_MINUTES, SECRET_KEY
 
 ALGORITHM = "HS256"
+ACCESS_TOKEN_TYPE = "access"
 
 password_hash = PasswordHash.recommended()  # Argon2id
 
@@ -24,15 +27,38 @@ def verify_password(password: str, hashed: str | None) -> bool:
     return password_hash.verify(password, hashed)
 
 
+# ---- access tokens: short-lived, stateless JWTs ----------------------------------------------
+
 def create_access_token(user_id: int) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    return jwt.encode({"sub": str(user_id), "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(user_id),
+        "type": ACCESS_TOKEN_TYPE,
+        "iat": now,
+        "exp": now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def decode_access_token(token: str) -> int | None:
-    """Returns the user id, or None if the token is invalid or expired."""
+    """Returns the user id, or None if the token is invalid, expired, or not an access token."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != ACCESS_TOKEN_TYPE:
+            return None
         return int(payload["sub"])
     except (jwt.InvalidTokenError, KeyError, ValueError):
         return None
+
+
+# ---- refresh tokens: opaque random strings, only a SHA-256 hash is stored --------------------
+
+def hash_refresh_token(raw_token: str) -> str:
+    # A fast hash is fine here: the token is 384 bits of randomness, not a guessable password.
+    return hashlib.sha256(raw_token.encode()).hexdigest()
+
+
+def generate_refresh_token() -> tuple[str, str]:
+    """Returns (raw_token_for_the_client, hash_to_store)."""
+    raw = secrets.token_urlsafe(48)
+    return raw, hash_refresh_token(raw)

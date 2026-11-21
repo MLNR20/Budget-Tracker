@@ -32,5 +32,8 @@ class UserResponse(BaseModel):
 
 
 class Token(BaseModel):
+    """Body of login/refresh responses. The refresh token is NOT here: it is an HttpOnly cookie."""
+
     access_token: str
     token_type: str = "bearer"
+    expires_in: int  # seconds until the access token expires

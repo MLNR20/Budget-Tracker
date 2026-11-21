@@ -5,8 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from database import init_db
-from routers import auth, budgets, cards, transactions, users
-from services import BusinessRuleError, NotFoundError
+from routers import analytics, auth, budgets, cards, transactions, users
+from services import AuthenticationError, BusinessRuleError, NotFoundError
 
 
 @asynccontextmanager
@@ -26,6 +26,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.exception_handler(AuthenticationError)
+async def authentication_handler(_request: Request, exc: AuthenticationError):
+    return JSONResponse(
+        status_code=401,
+        content={"detail": exc.message},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
 @app.exception_handler(NotFoundError)
 async def not_found_handler(_request: Request, exc: NotFoundError):
     return JSONResponse(status_code=404, content={"detail": exc.message})
@@ -41,6 +50,7 @@ app.include_router(users.router)
 app.include_router(budgets.router)
 app.include_router(cards.router)
 app.include_router(transactions.router)
+app.include_router(analytics.router)
 
 
 @app.get("/")

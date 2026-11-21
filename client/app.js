@@ -1,5 +1,4 @@
 const API_URL = "http://localhost:8000";
-const TOKEN_KEY = "budget-tracker-token";
 const SIDEBAR_KEY = "budget-tracker-sidebar-collapsed";
 const VIEW_KEY = "budget-tracker-view";
 
@@ -25,7 +24,10 @@ function escapeHtml(str) {
 /* API + session                                                       */
 /* ------------------------------------------------------------------ */
 
-let token = localStorage.getItem(TOKEN_KEY);
+// The access token lives in memory only (never localStorage), so a script injected into the
+// page can't read a long-lived credential. The refresh token is an HttpOnly cookie that
+// JavaScript can't read at all; it is only used by refreshSession() below.
+let token = null;
 let currentUser = null;
 
 function errorMessage(detail) {
@@ -36,7 +38,32 @@ function errorMessage(detail) {
   return "Something went wrong.";
 }
 
-async function api(path, { method = "GET", json, form, auth = true } = {}) {
+// Ask the API for a new access token using the refresh cookie.
+// Resolves to "ok", "denied" (no/expired/revoked refresh token) or "offline" (API unreachable).
+// Concurrent callers share one request, because each refresh token can only be used once.
+let refreshInFlight = null;
+
+function refreshSession() {
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      try {
+        const res = await fetch(`${API_URL}/auth/refresh`, { method: "POST", credentials: "include" });
+        if (!res.ok) return "denied";
+        const data = await res.json();
+        token = data.access_token;
+        return "ok";
+      } catch {
+        return "offline";
+      } finally {
+        refreshInFlight = null;
+      }
+    })();
+  }
+  return refreshInFlight;
+}
+
+async function api(path, opts = {}, retried = false) {
+  const { method = "GET", json, form, auth = true } = opts;
   const headers = {};
   let body;
   if (json !== undefined) {
@@ -49,14 +76,17 @@ async function api(path, { method = "GET", json, form, auth = true } = {}) {
 
   let res;
   try {
-    res = await fetch(API_URL + path, { method, headers, body });
+    // credentials: "include" lets the browser send/store the refresh cookie across origins.
+    res = await fetch(API_URL + path, { method, headers, body, credentials: "include" });
   } catch {
     throw new Error("Can't reach the server. Is the API running?");
   }
 
-  // A protected endpoint rejected our token: send the user back to the login screen.
   if (res.status === 401 && auth) {
-    logout("Your session expired. Please log in again.");
+    // The access token probably expired: get a new one and retry this request once.
+    if (!retried && (await refreshSession()) === "ok") return api(path, opts, true);
+    // Refresh failed too, so the session is really over.
+    logout("Your session expired. Please log in again.", false);
     throw new Error("Unauthorized");
   }
   if (res.status === 204) return null;
@@ -100,10 +130,14 @@ function showAuthScreen(message = "") {
   showAuthError(message);
 }
 
-function logout(message = "") {
+// notifyServer: also revoke the refresh token server-side (skipped when the server already
+// rejected it). The access token can't be revoked; it simply expires within minutes.
+function logout(message = "", notifyServer = true) {
+  if (notifyServer) {
+    fetch(`${API_URL}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
+  }
   token = null;
   currentUser = null;
-  localStorage.removeItem(TOKEN_KEY);
   setAuthMode("login");
   showAuthScreen(message);
 }
@@ -147,8 +181,7 @@ $("auth-form").addEventListener("submit", async (e) => {
       auth: false,
       form: { username: email, password },
     });
-    token = result.access_token;
-    localStorage.setItem(TOKEN_KEY, token);
+    token = result.access_token; // the refresh token arrived as an HttpOnly cookie
     await enterApp();
   } catch (err) {
     showAuthError(err.message);
@@ -204,7 +237,7 @@ async function enterApp() {
   $("auth-view").classList.add("hidden");
   $("app-view").classList.remove("hidden");
   const view = localStorage.getItem(VIEW_KEY);
-  showView(["dashboard", "cards", "budgets"].includes(view) ? view : "dashboard");
+  showView(["dashboard", "crud", "cards", "budgets"].includes(view) ? view : "dashboard");
 }
 
 /* ------------------------------------------------------------------ */
@@ -214,8 +247,10 @@ async function enterApp() {
 let transactions = [];
 
 function showTransactionsError(message) {
-  $("transactions-error").textContent = message;
-  $("transactions-error").classList.toggle("hidden", !message);
+  for (const id of ["transactions-error", "crud-error"]) {
+    $(id).textContent = message;
+    $(id).classList.toggle("hidden", !message);
+  }
 }
 
 async function loadTransactions() {
@@ -227,6 +262,7 @@ async function loadTransactions() {
     if (err.message !== "Unauthorized") showTransactionsError(err.message);
   }
   renderTransactions();
+  loadCharts(); // transactions changed, so the aggregates did too
 }
 
 function setInvalid(input, invalid) {
@@ -313,6 +349,161 @@ $("clear-all").addEventListener("click", async () => {
   } catch (err) {
     if (err.message !== "Unauthorized") showTransactionsError(err.message);
   }
+});
+
+/* ------------------------------------------------------------------ */
+/* Charts (pie, bar, line). Numbers come from GET /analytics, which    */
+/* aggregates and filters on the server.                               */
+/* ------------------------------------------------------------------ */
+
+const CHART_COLORS = [
+  "#2563eb", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6",
+  "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#64748b",
+];
+
+const charts = { pie: null, bar: null, line: null };
+let chartsRequestId = 0; // so a slow, older response can't overwrite a newer one
+
+function showChartsError(message) {
+  $("charts-error").textContent = message;
+  $("charts-error").classList.toggle("hidden", !message);
+}
+
+function chartFilterParams() {
+  const params = new URLSearchParams({
+    type: $("filter-type").value,
+    group_by: $("filter-group").value,
+    // Minutes east of UTC, so "today" on the server means today for this user.
+    tz_offset_minutes: String(-new Date().getTimezoneOffset()),
+  });
+  if ($("filter-category").value) params.set("category", $("filter-category").value);
+  if ($("filter-from").value) params.set("date_from", $("filter-from").value);
+  if ($("filter-to").value) params.set("date_to", $("filter-to").value);
+  return params;
+}
+
+// Keep the category dropdown in sync with the categories the user has actually used.
+function fillCategoryFilter(categories) {
+  const select = $("filter-category");
+  const selected = select.value;
+  select.innerHTML =
+    `<option value="">All categories</option>` +
+    categories.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+  select.value = categories.includes(selected) ? selected : "";
+}
+
+function formatPeriod(period) {
+  const [y, m, d] = period.split("-").map(Number);
+  return d
+    ? new Date(y, m - 1, d).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    : new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" });
+}
+
+// Create the chart on first use, then just swap its data.
+function upsertChart(key, canvasId, config) {
+  if (!window.Chart) return; // CDN blocked/offline: the rest of the dashboard still works
+  if (charts[key]) {
+    charts[key].data = config.data;
+    charts[key].options = config.options;
+    charts[key].update();
+  } else {
+    charts[key] = new Chart($(canvasId), config);
+  }
+}
+
+function renderCharts(data) {
+  const hasData = data.count > 0;
+  $("charts-empty").classList.toggle("hidden", hasData);
+  for (const id of ["chart-pie", "chart-bar", "chart-line"]) {
+    $(id).parentElement.classList.toggle("invisible", !hasData);
+  }
+
+  const typeLabel = { expense: "Expenses", income: "Income", all: "Transactions" }[$("filter-type").value];
+  $("line-title").textContent = `${typeLabel} over time (${$("filter-group").value === "month" ? "monthly" : "daily"})`;
+
+  const labels = data.by_category.map((c) => c.category);
+  const totals = data.by_category.map((c) => Number(c.total));
+  const colors = labels.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
+  const moneyTick = (v) => money(v);
+
+  upsertChart("pie", "chart-pie", {
+    type: "pie",
+    data: { labels, datasets: [{ data: totals, backgroundColor: colors }] },
+    options: {
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: "right" },
+        tooltip: {
+          callbacks: {
+            label: (ctx) => ` ${ctx.label}: ${money(ctx.parsed)} (${data.by_category[ctx.dataIndex].percent}%)`,
+          },
+        },
+      },
+    },
+  });
+
+  upsertChart("bar", "chart-bar", {
+    type: "bar",
+    data: { labels, datasets: [{ label: typeLabel, data: totals, backgroundColor: colors }] },
+    options: {
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } },
+      },
+      scales: { y: { beginAtZero: true, ticks: { callback: moneyTick } } },
+    },
+  });
+
+  upsertChart("line", "chart-line", {
+    type: "line",
+    data: {
+      labels: data.over_time.map((p) => formatPeriod(p.period)),
+      datasets: [
+        {
+          label: typeLabel,
+          data: data.over_time.map((p) => Number(p.total)),
+          borderColor: CHART_COLORS[0],
+          backgroundColor: "rgba(37, 99, 235, 0.12)",
+          fill: true,
+          tension: 0.25,
+          pointRadius: data.over_time.length > 45 ? 0 : 3,
+        },
+      ],
+    },
+    options: {
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (ctx) => ` ${money(ctx.parsed.y)}` } },
+      },
+      scales: {
+        y: { beginAtZero: true, ticks: { callback: moneyTick } },
+        x: { ticks: { maxTicksLimit: 12, maxRotation: 0 } },
+      },
+    },
+  });
+}
+
+async function loadCharts() {
+  const requestId = ++chartsRequestId;
+  try {
+    const data = await api(`/analytics?${chartFilterParams()}`);
+    if (requestId !== chartsRequestId) return;
+    showChartsError("");
+    fillCategoryFilter(data.categories);
+    renderCharts(data);
+  } catch (err) {
+    if (requestId === chartsRequestId && err.message !== "Unauthorized") showChartsError(err.message);
+  }
+}
+
+$("chart-filters").addEventListener("change", loadCharts);
+$("chart-filters").addEventListener("submit", (e) => e.preventDefault());
+$("filter-reset").addEventListener("click", () => {
+  $("chart-filters").reset();
+  loadCharts();
 });
 
 /* ------------------------------------------------------------------ */
@@ -661,7 +852,14 @@ $("card-list").addEventListener("click", async (e) => {
 
 async function boot() {
   setAuthMode("login");
-  if (!token) return showAuthScreen();
+  // Tokens used to live in localStorage; drop any leftover from the older version.
+  localStorage.removeItem("budget-tracker-token");
+
+  // No access token survives a page reload (it's memory-only), so try the refresh cookie:
+  // if it is still valid the user is silently signed back in.
+  const result = await refreshSession();
+  if (result === "offline") return showAuthScreen("Can't reach the server. Is the API running?");
+  if (result !== "ok") return showAuthScreen();
   try {
     await enterApp();
   } catch (err) {

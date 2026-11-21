@@ -12,3 +12,7 @@ class NotFoundError(ServiceError):
 
 class BusinessRuleError(ServiceError):
     """A request that is well-formed but breaks a rule, e.g. splitting more than the budget has."""
+
+
+class AuthenticationError(ServiceError):
+    """Bad credentials or an invalid/expired/revoked refresh token (HTTP 401)."""

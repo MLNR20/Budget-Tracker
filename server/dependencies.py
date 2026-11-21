@@ -8,10 +8,11 @@ from database import get_db
 from entities.user import User
 from repositories.budget_repository import BudgetRepository
 from repositories.card_repository import CardRepository
+from repositories.refresh_token_repository import RefreshTokenRepository
 from repositories.transaction_repository import TransactionRepository
 from repositories.user_repository import UserRepository
 from security import decode_access_token
-from services import BudgetService, CardService, TransactionService
+from services import AnalyticsService, AuthService, BudgetService, CardService, TransactionService
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
@@ -35,6 +36,20 @@ BudgetRepo = Annotated[BudgetRepository, Depends(get_budget_repository)]
 CardRepo = Annotated[CardRepository, Depends(get_card_repository)]
 
 
+def get_refresh_token_repository(db: DbSession) -> RefreshTokenRepository:
+    return RefreshTokenRepository(db)
+
+
+RefreshTokenRepo = Annotated[RefreshTokenRepository, Depends(get_refresh_token_repository)]
+
+
+def get_auth_service(users: UserRepo, tokens: RefreshTokenRepo) -> AuthService:
+    return AuthService(users, tokens)
+
+
+AuthSvc = Annotated[AuthService, Depends(get_auth_service)]
+
+
 def get_transaction_repository(db: DbSession) -> TransactionRepository:
     return TransactionRepository(db)
 
@@ -47,6 +62,13 @@ def get_transaction_service(transactions: TransactionRepo) -> TransactionService
 
 
 TransactionSvc = Annotated[TransactionService, Depends(get_transaction_service)]
+
+
+def get_analytics_service(transactions: TransactionRepo) -> AnalyticsService:
+    return AnalyticsService(transactions)
+
+
+AnalyticsSvc = Annotated[AnalyticsService, Depends(get_analytics_service)]
 
 
 def get_budget_service(budgets: BudgetRepo, cards: CardRepo) -> BudgetService:
