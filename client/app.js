@@ -100,22 +100,53 @@ async function api(path, opts = {}, retried = false) {
 /* Login / register                                                    */
 /* ------------------------------------------------------------------ */
 
-let authMode = "login";
+let authMode = "login"; // "login" | "register" | "forgot" | "reset"
+let resetToken = null; // from the emailed link (#reset-password=...), only ever kept in memory
+
+const AUTH_HEADINGS = {
+  forgot: ["Forgot your password?", "Enter your email and we'll send you a link to reset it."],
+  reset: ["Choose a new password", "Pick a new password for your account."],
+};
+const AUTH_SUBMIT_LABELS = {
+  login: "Log in",
+  register: "Create account",
+  forgot: "Send reset link",
+  reset: "Set new password",
+};
 
 function setAuthMode(mode) {
   authMode = mode;
+  const login = mode === "login";
   const register = mode === "register";
+  const forgot = mode === "forgot";
+  const reset = mode === "reset";
+  const tabs = login || register;
+
+  $("auth-tabs").classList.toggle("hidden", !tabs);
+  $("auth-heading").classList.toggle("hidden", tabs);
+  if (!tabs) {
+    [$("auth-heading-title").textContent, $("auth-heading-text").textContent] = AUTH_HEADINGS[mode];
+  }
+
   $("register-fields").classList.toggle("hidden", !register);
   $("register-fields").classList.toggle("grid", register);
-  $("password-hint").classList.toggle("hidden", !register);
-  $("auth-submit").textContent = register ? "Create account" : "Log in";
-  $("password").autocomplete = register ? "new-password" : "current-password";
-  for (const [id, active] of [["tab-login", !register], ["tab-register", register]]) {
+  $("email-field").classList.toggle("hidden", reset);
+  $("password-field").classList.toggle("hidden", forgot);
+  $("forgot-link").classList.toggle("hidden", !login);
+  $("password-hint").classList.toggle("hidden", !(register || reset));
+  $("confirm-field").classList.toggle("hidden", !reset);
+  $("back-to-login").classList.toggle("hidden", tabs);
+  $("password-label").textContent = reset ? "New password" : "Password";
+  $("auth-submit").textContent = AUTH_SUBMIT_LABELS[mode];
+  $("password").autocomplete = login ? "current-password" : "new-password";
+
+  for (const [id, active] of [["tab-login", login], ["tab-register", register]]) {
     $(id).classList.toggle("bg-white", active);
     $(id).classList.toggle("text-slate-900", active);
     $(id).classList.toggle("text-slate-500", !active);
   }
   showAuthError("");
+  showAuthInfo("");
 }
 
 function showAuthError(message) {
@@ -123,11 +154,22 @@ function showAuthError(message) {
   $("auth-error").classList.toggle("hidden", !message);
 }
 
+function showAuthInfo(message) {
+  $("auth-info").textContent = message;
+  $("auth-info").classList.toggle("hidden", !message);
+}
+
 function showAuthScreen(message = "") {
   $("app-view").classList.add("hidden");
   $("auth-view").classList.remove("hidden");
   $("password").value = "";
+  $("confirm-password").value = "";
   showAuthError(message);
+}
+
+// Drop "#reset-password=..." from the address bar so the token doesn't linger in the URL/history.
+function clearResetFromUrl() {
+  history.replaceState(null, "", location.pathname + location.search);
 }
 
 // notifyServer: also revoke the refresh token server-side (skipped when the server already
@@ -145,12 +187,63 @@ function logout(message = "", notifyServer = true) {
 $("tab-login").addEventListener("click", () => setAuthMode("login"));
 $("tab-register").addEventListener("click", () => setAuthMode("register"));
 $("logout").addEventListener("click", () => logout());
+$("forgot-link").addEventListener("click", () => setAuthMode("forgot"));
+$("back-to-login").addEventListener("click", () => {
+  resetToken = null;
+  clearResetFromUrl();
+  setAuthMode("login");
+});
+
+// "Forgot password": always shows the server's neutral answer, whether or not the email exists.
+async function submitForgotPassword(email) {
+  if (!email) return showAuthError("Enter your email.");
+  const submit = $("auth-submit");
+  submit.disabled = true;
+  try {
+    const result = await api("/auth/forgot-password", { method: "POST", auth: false, json: { email } });
+    showAuthInfo(result.detail);
+  } catch (err) {
+    showAuthError(err.message);
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+// "Reset password": uses the token from the emailed link; success signs out every session.
+async function submitResetPassword(password) {
+  if (password.length < 8) return showAuthError("Password must be at least 8 characters.");
+  if (password !== $("confirm-password").value) return showAuthError("The passwords don't match.");
+  const submit = $("auth-submit");
+  submit.disabled = true;
+  try {
+    await api("/auth/reset-password", {
+      method: "POST",
+      auth: false,
+      json: { token: resetToken, new_password: password },
+    });
+    resetToken = null;
+    token = null;
+    setAuthMode("login");
+    $("password").value = "";
+    $("confirm-password").value = "";
+    showAuthInfo("Password updated. Log in with your new password.");
+  } catch (err) {
+    showAuthError(err.message);
+  } finally {
+    submit.disabled = false;
+  }
+}
 
 $("auth-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const email = $("email").value.trim();
   const password = $("password").value;
   const register = authMode === "register";
+
+  showAuthError("");
+  showAuthInfo("");
+  if (authMode === "forgot") return submitForgotPassword(email);
+  if (authMode === "reset") return submitResetPassword(password);
 
   if (!email || !password) return showAuthError("Enter your email and password.");
   if (register) {
@@ -218,8 +311,13 @@ function showView(name) {
     $("view-" + btn.dataset.view).classList.toggle("hidden", !active);
   });
   if (name === "budgets") loadBudgets();
-  if (name === "dashboard") loadDashboardCards();
+  if (name === "dashboard") {
+    loadDashboardCards();
+    // Opening the dashboard also creates anything that has come due; refresh if it did.
+    catchUpRecurring().then((created) => { if (created) loadTransactions(); });
+  }
   if (name === "cards") loadCardsView();
+  if (name === "recurring") loadRecurring();
 }
 
 document.querySelectorAll("[data-view]").forEach((btn) =>
@@ -229,6 +327,7 @@ document.querySelectorAll("[data-view]").forEach((btn) =>
 async function enterApp() {
   currentUser = await api("/users/me");
   $("user-name").textContent = `${currentUser.first_name} ${currentUser.last_name}`;
+  await catchUpRecurring(); // create anything that came due since the last visit, before loading
   loadTransactions(); // fire and forget: renders when the API responds
 
   const stored = localStorage.getItem(SIDEBAR_KEY);
@@ -237,7 +336,7 @@ async function enterApp() {
   $("auth-view").classList.add("hidden");
   $("app-view").classList.remove("hidden");
   const view = localStorage.getItem(VIEW_KEY);
-  showView(["dashboard", "crud", "cards", "budgets"].includes(view) ? view : "dashboard");
+  showView(["dashboard", "crud", "cards", "recurring", "budgets"].includes(view) ? view : "dashboard");
 }
 
 /* ------------------------------------------------------------------ */
@@ -847,6 +946,169 @@ $("card-list").addEventListener("click", async (e) => {
 });
 
 /* ------------------------------------------------------------------ */
+/* Recurring transactions (lazy catch-up: no scheduler)                */
+/* ------------------------------------------------------------------ */
+
+// Ask the server to create everything that has come due. It's idempotent, so calling it again
+// just returns 0. Throttled so login + opening the dashboard don't fire it twice in a row.
+let lastCatchUp = 0;
+
+async function catchUpRecurring() {
+  if (Date.now() - lastCatchUp < 5000) return 0;
+  lastCatchUp = Date.now();
+  try {
+    const result = await api("/recurring/process", { method: "POST" });
+    return result.created;
+  } catch {
+    return 0; // never block the app on this; the next visit retries
+  }
+}
+
+const FREQUENCY_LABELS = { daily: "Daily", weekly: "Weekly", monthly: "Monthly", yearly: "Yearly" };
+
+function showRecurringError(message) {
+  $("recurring-error").textContent = message;
+  $("recurring-error").classList.toggle("hidden", !message);
+}
+
+function showRecurringInfo(message) {
+  $("recurring-info").textContent = message;
+  $("recurring-info").classList.toggle("hidden", !message);
+}
+
+// "2026-07-01" -> a local Date (avoids new Date("2026-07-01") parsing it as UTC midnight)
+function isoToDate(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d);
+}
+const formatDay = (iso) =>
+  isoToDate(iso).toLocaleDateString("en-PH", { year: "numeric", month: "short", day: "numeric" });
+
+function todayIso() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function recurringHtml(rule) {
+  const ended = rule.end_date && rule.next_run_date > rule.end_date;
+  const status = ended
+    ? `<span class="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">Ended</span>`
+    : !rule.is_active
+      ? `<span class="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700">Paused</span>`
+      : `<span class="text-xs text-slate-500">Next: ${formatDay(rule.next_run_date)}</span>`;
+  const income = rule.type === "income";
+  const toggle = ended
+    ? ""
+    : `<button type="button" class="btn-icon" data-toggle-rule="${rule.id}" data-active="${rule.is_active}"
+         aria-label="${rule.is_active ? "Pause" : "Resume"}" title="${rule.is_active ? "Pause" : "Resume"}">
+         <i class="bi bi-${rule.is_active ? "pause-fill" : "play-fill"}"></i>
+       </button>`;
+  const until = rule.end_date ? ` &middot; until ${formatDay(rule.end_date)}` : "";
+
+  return `
+    <li class="panel flex items-center gap-4 ${rule.is_active || ended ? "" : "opacity-70"}">
+      <span class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+        <i class="bi bi-arrow-repeat text-xl"></i>
+      </span>
+      <div class="min-w-0 flex-1">
+        <p class="truncate font-medium">${escapeHtml(rule.description)}</p>
+        <p class="truncate text-xs text-slate-500">
+          ${FREQUENCY_LABELS[rule.frequency]} &middot; ${escapeHtml(rule.category)}${until}
+        </p>
+      </div>
+      <div class="hidden text-right sm:block">${status}</div>
+      <p class="font-semibold ${income ? "text-emerald-600" : "text-red-600"}">
+        ${income ? "+" : "-"}${money(rule.amount)}
+      </p>
+      <div class="flex gap-1">
+        ${toggle}
+        <button type="button" class="btn-icon" data-delete-rule="${rule.id}" aria-label="Delete" title="Delete">
+          <i class="bi bi-trash"></i>
+        </button>
+      </div>
+    </li>`;
+}
+
+async function loadRecurring() {
+  try {
+    const rules = await api("/recurring");
+    showRecurringError("");
+    $("recurring-list").innerHTML = rules.map(recurringHtml).join("");
+    $("recurring-empty").classList.toggle("hidden", rules.length > 0);
+  } catch (err) {
+    if (err.message !== "Unauthorized") showRecurringError(err.message);
+  }
+}
+
+if (!$("rec-start").value) $("rec-start").value = todayIso();
+
+$("recurring-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const description = $("rec-description").value.trim();
+  const amount = $("rec-amount").value;
+  const start = $("rec-start").value;
+  const end = $("rec-end").value;
+
+  showRecurringInfo("");
+  if (!description) return showRecurringError("Enter a description.");
+  if (!(Number(amount) > 0)) return showRecurringError("Enter an amount greater than 0.");
+  if (!start) return showRecurringError("Pick a start date.");
+  if (end && end < start) return showRecurringError("The end date can't be before the start date.");
+
+  try {
+    const rule = await api("/recurring", {
+      method: "POST",
+      json: {
+        description,
+        amount,
+        type: $("rec-type").value,
+        category: $("rec-category").value,
+        frequency: $("rec-frequency").value,
+        start_date: start,
+        end_date: end || null,
+      },
+    });
+    e.target.reset();
+    $("rec-start").value = todayIso();
+    showRecurringError("");
+    if (rule.occurrences_generated > 0) {
+      const n = rule.occurrences_generated;
+      showRecurringInfo(`Added ${n} transaction${n === 1 ? "" : "s"} so far for "${rule.description}".`);
+    }
+    await loadRecurring();
+    loadTransactions(); // any backfilled transactions now exist
+  } catch (err) {
+    if (err.message !== "Unauthorized") showRecurringError(err.message);
+  }
+});
+
+$("recurring-list").addEventListener("click", async (e) => {
+  const toggleBtn = e.target.closest("[data-toggle-rule]");
+  const deleteBtn = e.target.closest("[data-delete-rule]");
+  try {
+    if (toggleBtn) {
+      const resume = toggleBtn.dataset.active !== "true";
+      await api(`/recurring/${toggleBtn.dataset.toggleRule}`, {
+        method: "PATCH",
+        json: { is_active: resume },
+      });
+      showRecurringInfo(resume ? "Resumed. Anything missed while it was paused is skipped." : "");
+      await loadRecurring();
+    } else if (
+      deleteBtn &&
+      confirm("Delete this recurring rule? Transactions it already created are kept.")
+    ) {
+      await api(`/recurring/${deleteBtn.dataset.deleteRule}`, { method: "DELETE" });
+      showRecurringInfo("");
+      await loadRecurring();
+    }
+  } catch (err) {
+    if (err.message !== "Unauthorized") showRecurringError(err.message);
+  }
+});
+
+/* ------------------------------------------------------------------ */
 /* Start                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -854,6 +1116,15 @@ async function boot() {
   setAuthMode("login");
   // Tokens used to live in localStorage; drop any leftover from the older version.
   localStorage.removeItem("budget-tracker-token");
+
+  // Opened from a password-reset email: show the new-password form instead of signing in.
+  const resetLink = location.hash.match(/^#reset-password=(.+)$/);
+  if (resetLink) {
+    resetToken = decodeURIComponent(resetLink[1]);
+    clearResetFromUrl();
+    setAuthMode("reset");
+    return showAuthScreen();
+  }
 
   // No access token survives a page reload (it's memory-only), so try the refresh cookie:
   // if it is still valid the user is silently signed back in.

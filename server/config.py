@@ -24,5 +24,22 @@ SECRET_KEY: str = os.environ.get("SECRET_KEY") or secrets.token_urlsafe(32)
 ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
 REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 
+# Which calendar day "today" is, for recurring transactions (a rule due on the 1st should fire on
+# the user's 1st, not the server's UTC 1st). IANA name, e.g. "Asia/Manila".
+APP_TIMEZONE: str = os.environ.get("APP_TIMEZONE", "Asia/Manila")
+
+# Password reset: single-use link, valid for this many minutes.
+PASSWORD_RESET_EXPIRE_MINUTES: int = int(os.environ.get("PASSWORD_RESET_EXPIRE_MINUTES", "30"))
+# Where the front end lives; reset links point here.
+FRONTEND_URL: str = os.environ.get("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+
+# Outgoing email (for reset links). If SMTP_HOST is empty, emails are NOT sent: the reset link is
+# written to the server log instead, which is only meant for local development.
+SMTP_HOST: str = os.environ.get("SMTP_HOST", "")
+SMTP_PORT: int = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER: str = os.environ.get("SMTP_USER", "")
+SMTP_PASSWORD: str = os.environ.get("SMTP_PASSWORD", "")
+SMTP_FROM: str = os.environ.get("SMTP_FROM", "") or SMTP_USER or "no-reply@budget-tracker.local"
+
 # The refresh token travels in an HttpOnly cookie. Set COOKIE_SECURE=true when served over HTTPS.
 COOKIE_SECURE: bool = _bool("COOKIE_SECURE", False)

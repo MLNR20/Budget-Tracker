@@ -8,11 +8,20 @@ from database import get_db
 from entities.user import User
 from repositories.budget_repository import BudgetRepository
 from repositories.card_repository import CardRepository
+from repositories.password_reset_token_repository import PasswordResetTokenRepository
+from repositories.recurring_transaction_repository import RecurringTransactionRepository
 from repositories.refresh_token_repository import RefreshTokenRepository
 from repositories.transaction_repository import TransactionRepository
 from repositories.user_repository import UserRepository
 from security import decode_access_token
-from services import AnalyticsService, AuthService, BudgetService, CardService, TransactionService
+from services import (
+    AnalyticsService,
+    AuthService,
+    BudgetService,
+    CardService,
+    RecurringTransactionService,
+    TransactionService,
+)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
@@ -43,8 +52,19 @@ def get_refresh_token_repository(db: DbSession) -> RefreshTokenRepository:
 RefreshTokenRepo = Annotated[RefreshTokenRepository, Depends(get_refresh_token_repository)]
 
 
-def get_auth_service(users: UserRepo, tokens: RefreshTokenRepo) -> AuthService:
-    return AuthService(users, tokens)
+def get_password_reset_token_repository(db: DbSession) -> PasswordResetTokenRepository:
+    return PasswordResetTokenRepository(db)
+
+
+PasswordResetTokenRepo = Annotated[
+    PasswordResetTokenRepository, Depends(get_password_reset_token_repository)
+]
+
+
+def get_auth_service(
+    users: UserRepo, tokens: RefreshTokenRepo, reset_tokens: PasswordResetTokenRepo
+) -> AuthService:
+    return AuthService(users, tokens, reset_tokens)
 
 
 AuthSvc = Annotated[AuthService, Depends(get_auth_service)]
@@ -62,6 +82,20 @@ def get_transaction_service(transactions: TransactionRepo) -> TransactionService
 
 
 TransactionSvc = Annotated[TransactionService, Depends(get_transaction_service)]
+
+
+def get_recurring_repository(db: DbSession) -> RecurringTransactionRepository:
+    return RecurringTransactionRepository(db)
+
+
+RecurringRepo = Annotated[RecurringTransactionRepository, Depends(get_recurring_repository)]
+
+
+def get_recurring_service(recurring: RecurringRepo) -> RecurringTransactionService:
+    return RecurringTransactionService(recurring)
+
+
+RecurringSvc = Annotated[RecurringTransactionService, Depends(get_recurring_service)]
 
 
 def get_analytics_service(transactions: TransactionRepo) -> AnalyticsService:

@@ -53,12 +53,16 @@ def decode_access_token(token: str) -> int | None:
 
 # ---- refresh tokens: opaque random strings, only a SHA-256 hash is stored --------------------
 
-def hash_refresh_token(raw_token: str) -> str:
+def hash_token(raw_token: str) -> str:
     # A fast hash is fine here: the token is 384 bits of randomness, not a guessable password.
     return hashlib.sha256(raw_token.encode()).hexdigest()
 
 
-def generate_refresh_token() -> tuple[str, str]:
-    """Returns (raw_token_for_the_client, hash_to_store)."""
+def generate_token() -> tuple[str, str]:
+    """Returns (raw_token_for_the_client, hash_to_store). Used for refresh and reset tokens."""
     raw = secrets.token_urlsafe(48)
-    return raw, hash_refresh_token(raw)
+    return raw, hash_token(raw)
+
+
+hash_refresh_token = hash_token
+generate_refresh_token = generate_token

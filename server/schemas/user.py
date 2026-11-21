@@ -31,6 +31,19 @@ class UserResponse(BaseModel):
     is_active: bool
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
+class Message(BaseModel):
+    detail: str
+
+
 class Token(BaseModel):
     """Body of login/refresh responses. The refresh token is NOT here: it is an HttpOnly cookie."""
 

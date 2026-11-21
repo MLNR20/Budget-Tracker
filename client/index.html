@@ -42,9 +42,15 @@
           <h1 class="mt-1 text-xl font-semibold">Budget Tracker</h1>
         </div>
 
-        <div class="mb-5 grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-sm font-medium">
+        <div id="auth-tabs" class="mb-5 grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-sm font-medium">
           <button type="button" id="tab-login" class="rounded-md px-3 py-1.5">Log in</button>
           <button type="button" id="tab-register" class="rounded-md px-3 py-1.5">Create account</button>
+        </div>
+
+        <!-- Shown instead of the tabs on the forgot/reset password screens -->
+        <div id="auth-heading" class="mb-5 hidden">
+          <h2 id="auth-heading-title" class="text-lg font-semibold"></h2>
+          <p id="auth-heading-text" class="text-sm text-slate-500"></p>
         </div>
 
         <form id="auth-form" novalidate class="space-y-4">
@@ -58,17 +64,28 @@
               <input id="last-name" type="text" autocomplete="family-name" class="input" />
             </div>
           </div>
-          <div>
+          <div id="email-field">
             <label for="email" class="label">Email</label>
             <input id="email" type="email" autocomplete="email" class="input" />
           </div>
-          <div>
-            <label for="password" class="label">Password</label>
+          <div id="password-field">
+            <div class="flex items-baseline justify-between">
+              <label id="password-label" for="password" class="label">Password</label>
+              <button type="button" id="forgot-link" class="mb-1 text-xs text-blue-600 hover:underline">Forgot password?</button>
+            </div>
             <input id="password" type="password" minlength="8" class="input" />
             <p id="password-hint" class="mt-1 hidden text-xs text-slate-500">At least 8 characters.</p>
           </div>
+          <div id="confirm-field" class="hidden">
+            <label for="confirm-password" class="label">Confirm new password</label>
+            <input id="confirm-password" type="password" autocomplete="new-password" class="input" />
+          </div>
           <p id="auth-error" class="hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert"></p>
+          <p id="auth-info" class="hidden rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700" role="status"></p>
           <button id="auth-submit" type="submit" class="btn-primary w-full">Log in</button>
+          <button type="button" id="back-to-login" class="hidden w-full text-center text-sm text-slate-600 hover:underline">
+            <i class="bi bi-arrow-left mr-1"></i>Back to log in
+          </button>
         </form>
       </div>
     </div>
@@ -105,6 +122,11 @@
             class="nav-item flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium group-data-[collapsed=true]:justify-center">
             <i class="bi bi-grid text-base"></i>
             <span class="group-data-[collapsed=true]:hidden">Cards</span>
+          </button>
+          <button type="button" data-view="recurring" title="Recurring"
+            class="nav-item flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium group-data-[collapsed=true]:justify-center">
+            <i class="bi bi-arrow-repeat text-base"></i>
+            <span class="group-data-[collapsed=true]:hidden">Recurring</span>
           </button>
           <button type="button" data-view="budgets" title="Budgets"
             class="nav-item flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium group-data-[collapsed=true]:justify-center">
@@ -320,6 +342,70 @@
             <p id="cards-error" class="mb-4 hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert"></p>
             <ul id="card-list" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"></ul>
             <p id="cards-empty" class="panel hidden text-center text-slate-500"></p>
+          </section>
+
+          <!-- Recurring: rules that create transactions automatically (caught up on login/dashboard) -->
+          <section id="view-recurring" class="hidden">
+            <h2 class="mb-1 text-2xl font-semibold">Recurring</h2>
+            <p class="mb-4 text-sm text-slate-500">
+              Set up a bill or income once. It's added to your transactions every period, and anything
+              that came due while you were away is added the next time you open the app.
+            </p>
+
+            <form id="recurring-form" novalidate class="panel mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div class="sm:col-span-2">
+                <label for="rec-description" class="label">Description</label>
+                <input id="rec-description" type="text" maxlength="200" placeholder="e.g. Rent" class="input" />
+              </div>
+              <div>
+                <label for="rec-amount" class="label">Amount</label>
+                <input id="rec-amount" type="number" min="0.01" step="0.01" placeholder="0.00" class="input" />
+              </div>
+              <div>
+                <label for="rec-type" class="label">Type</label>
+                <select id="rec-type" class="input">
+                  <option value="expense">Expense</option>
+                  <option value="income">Income</option>
+                </select>
+              </div>
+              <div>
+                <label for="rec-category" class="label">Category</label>
+                <select id="rec-category" class="input">
+                  <option>Food</option>
+                  <option>Transport</option>
+                  <option selected>Bills</option>
+                  <option>Shopping</option>
+                  <option>Entertainment</option>
+                  <option>Salary</option>
+                  <option>Other</option>
+                </select>
+              </div>
+              <div>
+                <label for="rec-frequency" class="label">Repeats</label>
+                <select id="rec-frequency" class="input">
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly" selected>Monthly</option>
+                  <option value="yearly">Yearly</option>
+                </select>
+              </div>
+              <div>
+                <label for="rec-start" class="label">Starts</label>
+                <input id="rec-start" type="date" class="input" />
+              </div>
+              <div>
+                <label for="rec-end" class="label">Ends <span class="font-normal text-slate-400">(optional)</span></label>
+                <input id="rec-end" type="date" class="input" />
+              </div>
+              <div class="sm:col-span-2 lg:col-span-4">
+                <button type="submit" class="btn-primary"><i class="bi bi-plus-lg mr-1"></i>Add recurring</button>
+              </div>
+            </form>
+
+            <p id="recurring-error" class="mb-4 hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert"></p>
+            <p id="recurring-info" class="mb-4 hidden rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700" role="status"></p>
+            <ul id="recurring-list" class="space-y-3"></ul>
+            <p id="recurring-empty" class="panel hidden text-center text-slate-500">No recurring transactions yet.</p>
           </section>
 
           <!-- Budgets (talks to the protected API) -->

@@ -1,13 +1,15 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Cookie, Depends, Response, status
+from fastapi import APIRouter, BackgroundTasks, Cookie, Depends, Response, status
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 
 from config import COOKIE_SECURE, REFRESH_TOKEN_EXPIRE_DAYS
+from database import SessionLocal
 from dependencies import AuthSvc
-from schemas import Token
-from services import AuthenticationError, TokenPair
+from repositories import PasswordResetTokenRepository, RefreshTokenRepository, UserRepository
+from schemas import ForgotPasswordRequest, Message, ResetPasswordRequest, Token
+from services import AuthenticationError, AuthService, TokenPair
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -72,3 +74,30 @@ def logout(
     """Revoke this session's refresh token and clear the cookie. Safe to call when logged out."""
     service.logout(refresh_token)
     _clear_refresh_cookie(response)
+
+
+def _send_reset_email_in_background(email: str) -> None:
+    # Runs after the response is sent, with its own database session (the request's is closed).
+    with SessionLocal() as db:
+        AuthService(
+            UserRepository(db), RefreshTokenRepository(db), PasswordResetTokenRepository(db)
+        ).request_password_reset(email)
+
+
+@router.post("/forgot-password", response_model=Message)
+def forgot_password(data: ForgotPasswordRequest, background: BackgroundTasks):
+    """Email a password-reset link.
+
+    Always answers the same thing whether or not the account exists, and does the real work after
+    responding, so neither the reply nor its timing reveals which emails are registered.
+    """
+    background.add_task(_send_reset_email_in_background, data.email)
+    return Message(detail="If an account exists for that email, a reset link is on its way.")
+
+
+@router.post("/reset-password", response_model=Message)
+def reset_password(data: ResetPasswordRequest, response: Response, service: AuthSvc):
+    """Set a new password using the token from the emailed link. Signs the user out everywhere."""
+    service.reset_password(data.token, data.new_password)
+    _clear_refresh_cookie(response)
+    return Message(detail="Password updated. You can now log in with your new password.")

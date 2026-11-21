@@ -33,5 +33,11 @@ class RefreshTokenRepository(BaseRepository[RefreshToken]):
 
     def delete_expired(self) -> None:
         """Housekeeping: expired rows can never be used again."""
-        self.session.execute(delete(RefreshToken).where(RefreshToken.expires_at < utc_now()))
+        # synchronize_session=False: compare in the database, not in Python against loaded rows
+        # (SQLite returns naive datetimes, which can't be compared with an aware one).
+        self.session.execute(
+            delete(RefreshToken)
+            .where(RefreshToken.expires_at < utc_now())
+            .execution_options(synchronize_session=False)
+        )
         self.session.commit()
