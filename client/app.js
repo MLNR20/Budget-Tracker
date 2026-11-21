@@ -185,6 +185,8 @@ function showView(name) {
     $("view-" + btn.dataset.view).classList.toggle("hidden", !active);
   });
   if (name === "budgets") loadBudgets();
+  if (name === "dashboard") loadDashboardCards();
+  if (name === "cards") loadCardsView();
 }
 
 document.querySelectorAll("[data-view]").forEach((btn) =>
@@ -202,7 +204,7 @@ async function enterApp() {
   $("auth-view").classList.add("hidden");
   $("app-view").classList.remove("hidden");
   const view = localStorage.getItem(VIEW_KEY);
-  showView(view === "budgets" ? "budgets" : "dashboard");
+  showView(["dashboard", "cards", "budgets"].includes(view) ? view : "dashboard");
 }
 
 /* ------------------------------------------------------------------ */
@@ -346,18 +348,52 @@ function iconPicker(budgetId) {
   ).join("");
 }
 
-function cardHtml(card) {
+// An icon tile for one card. On the dashboard it is read-only and shows its budget's name.
+function cardHtml(card, budgetTotal, { readOnly = false, editable = false, budgetName = "" } = {}) {
+  const share = budgetTotal > 0 ? Math.round((Number(card.amount) / budgetTotal) * 100) : 0;
+  const caption = budgetName ? `${escapeHtml(budgetName)} &middot; ${share}%` : `${share}% of budget`;
+  const editBtn = editable
+    ? `<button type="button" class="btn-icon" data-edit-card="${card.id}" aria-label="Edit card"><i class="bi bi-pencil"></i></button>`
+    : "";
+  const actions = readOnly
+    ? ""
+    : `<div class="absolute right-3 top-3 flex gap-1">
+        ${editBtn}
+        <button type="button" class="btn-icon" data-delete-card="${card.id}" aria-label="Delete card"><i class="bi bi-x-lg"></i></button>
+      </div>`;
   return `
-    <li class="flex items-center gap-3 py-2">
-      <span class="flex size-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-        <i class="bi bi-${safeIcon(card.icon)} text-lg"></i>
+    <li class="relative rounded-2xl border border-slate-200 bg-white p-4">
+      ${actions}
+      <span class="mb-3 flex size-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+        <i class="bi bi-${safeIcon(card.icon)} text-3xl"></i>
       </span>
-      <span class="min-w-0 flex-1 truncate font-medium">${escapeHtml(card.name)}</span>
-      <span class="font-medium">${money(card.amount)}</span>
-      <button type="button" class="btn-icon" data-delete-card="${card.id}" aria-label="Delete card">
-        <i class="bi bi-x-lg"></i>
-      </button>
+      <p class="truncate font-medium">${escapeHtml(card.name)}</p>
+      <p class="text-lg font-semibold">${money(card.amount)}</p>
+      <p class="truncate text-xs text-slate-500">${caption}</p>
     </li>`;
+}
+
+function renderDashboardCards(budgets, cards) {
+  const budgetById = new Map(budgets.map((b) => [b.id, b]));
+  $("dashboard-cards").innerHTML = cards
+    .map((c) => {
+      const budget = budgetById.get(c.budget_id);
+      return cardHtml(c, budget ? Number(budget.current_amount) : 0, {
+        readOnly: true,
+        budgetName: budget ? budget.name : "",
+      });
+    })
+    .join("");
+  $("dashboard-cards-empty").classList.toggle("hidden", cards.length > 0);
+}
+
+async function loadDashboardCards() {
+  try {
+    const [budgets, cards] = await Promise.all([api("/budgets"), api("/cards")]);
+    renderDashboardCards(budgets, cards);
+  } catch (err) {
+    if (err.message !== "Unauthorized") showTransactionsError(err.message);
+  }
 }
 
 function budgetHtml(budget, cards) {
@@ -383,7 +419,7 @@ function budgetHtml(budget, cards) {
       </div>
       <p class="mb-3 text-sm text-slate-500">${money(allocated)} split into cards &middot; ${money(remaining)} left</p>
 
-      ${cards.length ? `<ul class="mb-3 divide-y divide-slate-100">${cards.map(cardHtml).join("")}</ul>` : ""}
+      ${cards.length ? `<ul class="mb-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">${cards.map((c) => cardHtml(c, total)).join("")}</ul>` : ""}
 
       <form data-budget-id="${budget.id}" novalidate class="rounded-xl bg-slate-50 p-3">
         <p class="mb-2 text-sm font-medium">Split into a card</p>
@@ -461,6 +497,161 @@ $("budget-list").addEventListener("click", async (e) => {
     await loadBudgets();
   } catch (err) {
     if (err.message !== "Unauthorized") showBudgetsError(err.message);
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* Cards view: create / read / update / delete                         */
+/* ------------------------------------------------------------------ */
+
+const cardsState = { budgets: [], cards: [], editingId: null };
+
+function showCardsError(message) {
+  $("cards-error").textContent = message;
+  $("cards-error").classList.toggle("hidden", !message);
+}
+
+function showCardFormError(message) {
+  $("card-form-error").textContent = message;
+  $("card-form-error").classList.toggle("hidden", !message);
+}
+
+function renderCardsView() {
+  const { budgets, cards } = cardsState;
+  const budgetById = new Map(budgets.map((b) => [b.id, b]));
+
+  $("card-list").innerHTML = cards
+    .map((c) => {
+      const budget = budgetById.get(c.budget_id);
+      return cardHtml(c, budget ? Number(budget.current_amount) : 0, {
+        editable: true,
+        budgetName: budget ? budget.name : "",
+      });
+    })
+    .join("");
+
+  const empty = $("cards-empty");
+  empty.classList.toggle("hidden", cards.length > 0);
+  empty.textContent = budgets.length
+    ? "No cards yet. Click New card to split one of your budgets."
+    : "Create a budget first, then split it into cards.";
+  $("new-card-btn").disabled = budgets.length === 0;
+  $("new-card-btn").classList.toggle("opacity-50", budgets.length === 0);
+}
+
+async function loadCardsView() {
+  try {
+    const [budgets, cards] = await Promise.all([api("/budgets"), api("/cards")]);
+    cardsState.budgets = budgets;
+    cardsState.cards = cards;
+    showCardsError("");
+    renderCardsView();
+  } catch (err) {
+    if (err.message !== "Unauthorized") showCardsError(err.message);
+  }
+}
+
+// How much of the selected budget is still unsplit (ignoring the card being edited).
+function updateCardBudgetHint() {
+  const budgetId = Number($("card-budget").value);
+  const budget = cardsState.budgets.find((b) => b.id === budgetId);
+  if (!budget) {
+    $("card-budget-hint").textContent = "";
+    return;
+  }
+  const allocated = cardsState.cards
+    .filter((c) => c.budget_id === budgetId && c.id !== cardsState.editingId)
+    .reduce((sum, c) => sum + Number(c.amount), 0);
+  const left = Math.round((Number(budget.current_amount) - allocated) * 100) / 100;
+  $("card-budget-hint").textContent = `${money(left)} left to split in ${budget.name}.`;
+}
+
+function openCardForm(card = null) {
+  cardsState.editingId = card ? card.id : null;
+  showCardFormError("");
+
+  $("card-form-title").textContent = card ? "Edit card" : "New card";
+  $("card-save").textContent = card ? "Save changes" : "Create card";
+  $("card-form-icons").innerHTML = iconPicker();
+
+  $("card-budget").innerHTML = cardsState.budgets
+    .map((b) => `<option value="${b.id}">${escapeHtml(b.name)}</option>`)
+    .join("");
+  // The API doesn't move a card between budgets, so the budget is fixed once created.
+  $("card-budget").disabled = Boolean(card);
+
+  $("card-form-name").value = card ? card.name : "";
+  $("card-form-amount").value = card ? card.amount : "";
+  if (card) {
+    $("card-budget").value = String(card.budget_id);
+    const radio = $("card-form").querySelector(`input[name=icon][value="${safeIcon(card.icon)}"]`);
+    if (radio) radio.checked = true;
+  }
+
+  updateCardBudgetHint();
+  $("card-form").classList.remove("hidden");
+  $("card-form-name").focus();
+}
+
+function closeCardForm() {
+  cardsState.editingId = null;
+  $("card-form").classList.add("hidden");
+}
+
+$("new-card-btn").addEventListener("click", () => openCardForm());
+$("card-cancel").addEventListener("click", closeCardForm);
+$("card-budget").addEventListener("change", updateCardBudgetHint);
+
+$("card-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("card-form-name").value.trim();
+  const amount = $("card-form-amount").value;
+  const icon = $("card-form").elements.icon.value;
+
+  if (!name) return showCardFormError("Enter a card name.");
+  if (!(Number(amount) > 0)) return showCardFormError("Enter an amount greater than 0.");
+
+  const editing = cardsState.editingId;
+  $("card-save").disabled = true;
+  try {
+    if (editing) {
+      await api(`/cards/${editing}`, { method: "PATCH", json: { name, amount, icon } });
+    } else {
+      await api("/cards", {
+        method: "POST",
+        json: { budget_id: Number($("card-budget").value), name, amount, icon },
+      });
+    }
+    closeCardForm();
+    await loadCardsView();
+  } catch (err) {
+    // e.g. the 422 "Not enough left in budget to split" message from the server
+    if (err.message !== "Unauthorized") showCardFormError(err.message);
+  } finally {
+    $("card-save").disabled = false;
+  }
+});
+
+$("card-list").addEventListener("click", async (e) => {
+  const editBtn = e.target.closest("[data-edit-card]");
+  const deleteBtn = e.target.closest("[data-delete-card]");
+
+  if (editBtn) {
+    const card = cardsState.cards.find((c) => c.id === Number(editBtn.dataset.editCard));
+    if (card) {
+      openCardForm(card);
+      $("card-form").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+    return;
+  }
+
+  if (deleteBtn && confirm("Delete this card? Its amount goes back to the budget.")) {
+    try {
+      await api(`/cards/${deleteBtn.dataset.deleteCard}`, { method: "DELETE" });
+      await loadCardsView();
+    } catch (err) {
+      if (err.message !== "Unauthorized") showCardsError(err.message);
+    }
   }
 });
 

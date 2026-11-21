@@ -23,6 +23,7 @@
       .field-error { @apply mt-1 hidden text-sm text-red-600; }
       .btn-primary { @apply rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-300; }
       .btn-outline-danger { @apply rounded-lg border border-red-300 px-3 py-1.5 text-sm text-red-600 transition hover:bg-red-50; }
+      .btn-secondary { @apply rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100; }
       .btn-icon { @apply rounded-lg border border-slate-300 px-2 py-1 text-slate-500 transition hover:bg-slate-100; }
     }
   </style>
@@ -95,6 +96,11 @@
             <i class="bi bi-speedometer2 text-base"></i>
             <span class="group-data-[collapsed=true]:hidden">Dashboard</span>
           </button>
+          <button type="button" data-view="cards" title="Cards"
+            class="nav-item flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium group-data-[collapsed=true]:justify-center">
+            <i class="bi bi-grid text-base"></i>
+            <span class="group-data-[collapsed=true]:hidden">Cards</span>
+          </button>
           <button type="button" data-view="budgets" title="Budgets"
             class="nav-item flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium group-data-[collapsed=true]:justify-center">
             <i class="bi bi-piggy-bank text-base"></i>
@@ -133,6 +139,15 @@
                 <h3 id="expenses" class="text-2xl font-semibold text-red-600">$0.00</h3>
               </div>
             </div>
+
+            <!-- Cards (slices of your budgets) -->
+            <section class="mb-6">
+              <h3 class="mb-3 text-lg font-semibold">Cards</h3>
+              <ul id="dashboard-cards" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"></ul>
+              <p id="dashboard-cards-empty" class="panel hidden text-center text-slate-500">
+                No cards yet. Split a budget into cards on the Budgets page.
+              </p>
+            </section>
 
             <p id="transactions-error" class="mb-4 hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert"></p>
 
@@ -197,6 +212,48 @@
                 <p id="empty-state" class="py-8 text-center text-slate-500">No transactions yet.</p>
               </section>
             </div>
+          </section>
+
+          <!-- Cards: create, read, update, delete -->
+          <section id="view-cards" class="hidden">
+            <div class="mb-4 flex items-center justify-between">
+              <h2 class="text-2xl font-semibold">Cards</h2>
+              <button id="new-card-btn" type="button" class="btn-primary">
+                <i class="bi bi-plus-lg mr-1"></i>New card
+              </button>
+            </div>
+
+            <form id="card-form" novalidate class="panel mb-6 hidden">
+              <h3 id="card-form-title" class="mb-4 text-lg font-semibold">New card</h3>
+              <div class="mb-4">
+                <span class="label">Icon</span>
+                <div id="card-form-icons" class="flex flex-wrap gap-2"></div>
+              </div>
+              <div class="grid gap-4 sm:grid-cols-3">
+                <div>
+                  <label for="card-budget" class="label">Budget</label>
+                  <select id="card-budget" class="input disabled:bg-slate-100 disabled:text-slate-500"></select>
+                </div>
+                <div>
+                  <label for="card-form-name" class="label">Name</label>
+                  <input id="card-form-name" type="text" maxlength="100" placeholder="e.g. Groceries" class="input" />
+                </div>
+                <div>
+                  <label for="card-form-amount" class="label">Amount</label>
+                  <input id="card-form-amount" type="number" min="0.01" step="0.01" placeholder="0.00" class="input" />
+                </div>
+              </div>
+              <p id="card-budget-hint" class="mt-2 text-sm text-slate-500"></p>
+              <p id="card-form-error" class="mt-3 hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert"></p>
+              <div class="mt-4 flex gap-2">
+                <button id="card-save" type="submit" class="btn-primary">Save card</button>
+                <button id="card-cancel" type="button" class="btn-secondary">Cancel</button>
+              </div>
+            </form>
+
+            <p id="cards-error" class="mb-4 hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert"></p>
+            <ul id="card-list" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"></ul>
+            <p id="cards-empty" class="panel hidden text-center text-slate-500"></p>
           </section>
 
           <!-- Budgets (talks to the protected API) -->
