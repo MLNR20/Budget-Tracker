@@ -9,6 +9,7 @@ from entities.user import User
 from repositories.budget_repository import BudgetRepository
 from repositories.card_repository import CardRepository
 from repositories.password_reset_token_repository import PasswordResetTokenRepository
+from repositories import GoalBudgetRepository, GoalExpenseRepository, GoalRepository
 from repositories.recurring_transaction_repository import RecurringTransactionRepository
 from repositories.refresh_token_repository import RefreshTokenRepository
 from repositories.transaction_repository import TransactionRepository
@@ -19,6 +20,7 @@ from services import (
     AuthService,
     BudgetService,
     CardService,
+    GoalService,
     RecurringTransactionService,
     TransactionService,
 )
@@ -82,6 +84,15 @@ def get_transaction_service(transactions: TransactionRepo) -> TransactionService
 
 
 TransactionSvc = Annotated[TransactionService, Depends(get_transaction_service)]
+
+
+def get_goal_service(db: DbSession, budgets: BudgetRepo) -> GoalService:
+    return GoalService(
+        GoalRepository(db), GoalBudgetRepository(db), GoalExpenseRepository(db), budgets
+    )
+
+
+GoalSvc = Annotated[GoalService, Depends(get_goal_service)]
 
 
 def get_recurring_repository(db: DbSession) -> RecurringTransactionRepository:

@@ -318,6 +318,10 @@ function showView(name) {
   }
   if (name === "cards") loadCardsView();
   if (name === "recurring") loadRecurring();
+  if (name === "goals") {
+    goalsState.openId = null; // always land on the list
+    loadGoals();
+  }
 }
 
 document.querySelectorAll("[data-view]").forEach((btn) =>
@@ -336,7 +340,9 @@ async function enterApp() {
   $("auth-view").classList.add("hidden");
   $("app-view").classList.remove("hidden");
   const view = localStorage.getItem(VIEW_KEY);
-  showView(["dashboard", "crud", "cards", "recurring", "budgets"].includes(view) ? view : "dashboard");
+  showView(
+    ["dashboard", "crud", "cards", "recurring", "goals", "budgets"].includes(view) ? view : "dashboard"
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -1105,6 +1111,436 @@ $("recurring-list").addEventListener("click", async (e) => {
     }
   } catch (err) {
     if (err.message !== "Unauthorized") showRecurringError(err.message);
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* Goals: budgets assigned to a goal, an expense list with dates       */
+/* ------------------------------------------------------------------ */
+
+const goalsState = { goals: [], budgets: [], openId: null };
+
+function showGoalsError(message) {
+  $("goals-error").textContent = message;
+  $("goals-error").classList.toggle("hidden", !message);
+}
+
+function showGoalFormError(message) {
+  $("goal-form-error").textContent = message;
+  $("goal-form-error").classList.toggle("hidden", !message);
+}
+
+function goalBadge(goal) {
+  const s = goal.summary;
+  if (goal.is_achieved) {
+    return `<span class="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700">Achieved</span>`;
+  }
+  if (s.is_overdue) {
+    return `<span class="rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700">Overdue</span>`;
+  }
+  if (s.days_left === null) {
+    return `<span class="text-xs text-slate-500">No deadline</span>`;
+  }
+  const days = s.days_left === 1 ? "1 day left" : `${s.days_left} days left`;
+  return `<span class="text-xs text-slate-500">${days}</span>`;
+}
+
+function progressBar(goal) {
+  const done = goal.is_achieved || goal.summary.progress_pct >= 100;
+  return `
+    <div class="h-2 overflow-hidden rounded-full bg-slate-100">
+      <div class="h-full rounded-full ${done ? "bg-emerald-500" : "bg-blue-500"}" style="width: ${goal.summary.progress_pct}%"></div>
+    </div>`;
+}
+
+function goalCardHtml(goal) {
+  const s = goal.summary;
+  const monthly = s.monthly_needed ? `Save ${money(s.monthly_needed)} / month` : "&nbsp;";
+  return `
+    <button type="button" data-open-goal="${goal.id}"
+      class="panel block w-full text-left transition hover:border-blue-300 ${goal.is_achieved ? "opacity-80" : ""}">
+      <div class="mb-3 flex items-start justify-between gap-2">
+        <div class="flex min-w-0 items-center gap-3">
+          <span class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+            <i class="bi bi-bullseye text-xl"></i>
+          </span>
+          <p class="truncate text-lg font-semibold">${escapeHtml(goal.name)}</p>
+        </div>
+        ${goalBadge(goal)}
+      </div>
+      ${progressBar(goal)}
+      <p class="mt-2 text-sm"><span class="font-semibold">${money(s.funded_amount)}</span>
+        <span class="text-slate-500">of ${money(goal.target_amount)} &middot; ${s.progress_pct}%</span></p>
+      <p class="mt-1 text-xs text-slate-500">${monthly}</p>
+    </button>`;
+}
+
+function renderGoalList() {
+  $("goal-detail").classList.add("hidden");
+  $("goals-list-view").classList.remove("hidden");
+  $("goal-list").innerHTML = goalsState.goals.map(goalCardHtml).join("");
+  $("goals-empty").classList.toggle("hidden", goalsState.goals.length > 0);
+}
+
+async function loadGoals() {
+  try {
+    const [goals, budgets] = await Promise.all([api("/goals"), api("/budgets")]);
+    goalsState.goals = goals;
+    goalsState.budgets = budgets;
+    showGoalsError("");
+    if (goalsState.openId) {
+      renderGoalDetail(await api(`/goals/${goalsState.openId}`));
+    } else {
+      renderGoalList();
+    }
+  } catch (err) {
+    if (err.message !== "Unauthorized") showGoalsError(err.message);
+  }
+}
+
+// ---- one goal ----
+
+const statTile = (label, value, hint = "") => `
+  <div class="panel">
+    <p class="text-sm text-slate-500">${label}</p>
+    <p class="text-xl font-semibold">${value}</p>
+    ${hint ? `<p class="mt-0.5 text-xs text-slate-500">${hint}</p>` : ""}
+  </div>`;
+
+function goalBudgetsHtml(goal) {
+  // Budgets already funding some goal can't be picked again (a budget funds one goal).
+  const taken = new Set(goalsState.goals.flatMap((g) => g.budget_ids));
+  const available = goalsState.budgets.filter((b) => !taken.has(b.id));
+  const rows = goal.budgets
+    .map(
+      (b) => `
+      <li class="flex items-center gap-3 py-2">
+        <span class="flex size-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+          <i class="bi bi-piggy-bank"></i>
+        </span>
+        <span class="min-w-0 flex-1 truncate font-medium">${escapeHtml(b.name)}</span>
+        <span class="font-medium">${money(b.current_amount)}</span>
+        <button type="button" class="btn-icon" data-unassign-budget="${b.id}" aria-label="Remove from goal" title="Remove from goal">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </li>`
+    )
+    .join("");
+  const picker = available.length
+    ? `<form data-form="assign-budget" class="mt-3 flex gap-2">
+         <select name="budget_id" class="input" aria-label="Budget to assign">
+           ${available.map((b) => `<option value="${b.id}">${escapeHtml(b.name)} (${money(b.current_amount)})</option>`).join("")}
+         </select>
+         <button type="submit" class="btn-primary shrink-0">Assign</button>
+       </form>`
+    : `<p class="mt-3 text-sm text-slate-500">${
+        goalsState.budgets.length ? "All your budgets are already assigned to goals." : "Create a budget first on the Budgets page."
+      }</p>`;
+  return `
+    <section class="panel">
+      <h3 class="mb-1 text-lg font-semibold">Budgets</h3>
+      <p class="mb-2 text-sm text-slate-500">The money in these budgets counts toward this goal.</p>
+      ${goal.budgets.length ? `<ul class="divide-y divide-slate-100">${rows}</ul>` : `<p class="text-sm text-slate-500">No budgets assigned yet.</p>`}
+      ${picker}
+    </section>`;
+}
+
+function goalExpensesHtml(goal) {
+  const today = todayIso();
+  const rows = goal.expenses
+    .map((e) => {
+      const late = !e.is_paid && e.planned_date && e.planned_date < today;
+      const date = e.planned_date
+        ? `<span class="${late ? "font-medium text-red-600" : "text-slate-600"}">${formatDay(e.planned_date)}${late ? " (overdue)" : ""}</span>`
+        : `<span class="text-slate-400">No date</span>`;
+      return `
+        <li class="flex items-center gap-3 py-2.5 ${e.is_paid ? "opacity-60" : ""}">
+          <input type="checkbox" data-paid-expense="${e.id}" ${e.is_paid ? "checked" : ""}
+            class="size-4 shrink-0 rounded border-slate-300" aria-label="Mark as paid" />
+          <div class="min-w-0 flex-1">
+            <p class="truncate font-medium ${e.is_paid ? "line-through" : ""}">${escapeHtml(e.description)}</p>
+            <p class="truncate text-xs">${date}${e.notes ? ` &middot; <span class="text-slate-500">${escapeHtml(e.notes)}</span>` : ""}</p>
+          </div>
+          <span class="font-semibold">${money(e.amount)}</span>
+          <button type="button" class="btn-icon" data-delete-expense="${e.id}" aria-label="Delete expense" title="Delete">
+            <i class="bi bi-trash"></i>
+          </button>
+        </li>`;
+    })
+    .join("");
+  const max = goal.target_date ? `max="${goal.target_date}"` : "";
+  const s = goal.summary;
+  const gap =
+    Number(s.unplanned_amount) < 0
+      ? `<span class="text-red-600">${money(Math.abs(s.unplanned_amount))} over your target</span>`
+      : `${money(s.unplanned_amount)} not yet planned`;
+  return `
+    <section class="panel lg:col-span-2">
+      <div class="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+        <h3 class="text-lg font-semibold">Expense plan</h3>
+        <p class="text-sm text-slate-500">${money(s.planned_total)} planned &middot; ${money(s.paid_total)} paid &middot; ${gap}</p>
+      </div>
+      ${goal.expenses.length ? `<ul class="divide-y divide-slate-100">${rows}</ul>` : `<p class="py-3 text-sm text-slate-500">No expenses yet. Add what you'll need to pay for, and when.</p>`}
+      <form data-form="add-expense" novalidate class="mt-4 grid gap-3 rounded-xl bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-4">
+        <input name="description" type="text" maxlength="200" placeholder="Expense (e.g. Flights)" aria-label="Description" class="input sm:col-span-2" />
+        <input name="amount" type="number" min="0.01" step="0.01" placeholder="Amount" aria-label="Amount" class="input" />
+        <input name="planned_date" type="date" min="${goal.start_date}" ${max} aria-label="Planned date" class="input" />
+        <input name="notes" type="text" maxlength="500" placeholder="Notes (optional)" aria-label="Notes" class="input sm:col-span-2 lg:col-span-3" />
+        <button type="submit" class="btn-primary"><i class="bi bi-plus-lg mr-1"></i>Add expense</button>
+        <p data-error="expense" class="hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 sm:col-span-2 lg:col-span-4" role="alert"></p>
+      </form>
+    </section>`;
+}
+
+function renderGoalDetail(goal) {
+  goalsState.openId = goal.id;
+  const s = goal.summary;
+  const dates = goal.target_date
+    ? `${formatDay(goal.start_date)} &rarr; ${formatDay(goal.target_date)}`
+    : `Started ${formatDay(goal.start_date)} &middot; no deadline`;
+  const monthly = s.monthly_needed
+    ? statTile("Save per month", money(s.monthly_needed), `to finish by ${formatDay(goal.target_date)}`)
+    : statTile(
+        "Save per month",
+        "&mdash;",
+        goal.is_achieved ? "Goal achieved" : s.remaining_to_fund === "0.00" || Number(s.remaining_to_fund) === 0 ? "Fully funded" : s.is_overdue ? "Past the target date" : "Set a target date for a plan"
+      );
+
+  $("goal-detail").innerHTML = `
+    <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex min-w-0 items-center gap-3">
+        <button type="button" data-action="back" class="btn-icon" aria-label="Back to goals"><i class="bi bi-arrow-left"></i></button>
+        <h2 class="truncate text-2xl font-semibold">${escapeHtml(goal.name)}</h2>
+        ${goalBadge(goal)}
+      </div>
+      <div class="flex gap-2">
+        <button type="button" data-action="toggle-achieved" class="btn-secondary">
+          <i class="bi bi-${goal.is_achieved ? "arrow-counterclockwise" : "check2-circle"} mr-1"></i>${goal.is_achieved ? "Reopen" : "Mark achieved"}
+        </button>
+        <button type="button" data-action="delete-goal" class="btn-outline-danger"><i class="bi bi-trash mr-1"></i>Delete</button>
+      </div>
+    </div>
+
+    <p id="goal-detail-error" class="mb-4 hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert"></p>
+
+    <section class="panel mb-4">
+      ${progressBar(goal)}
+      <p class="mt-2 text-sm"><span class="font-semibold">${money(s.funded_amount)}</span>
+        <span class="text-slate-500">funded of ${money(goal.target_amount)} &middot; ${s.progress_pct}%</span></p>
+    </section>
+
+    <div class="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      ${statTile("Target", money(goal.target_amount), dates)}
+      ${statTile("Still to fund", money(s.remaining_to_fund), s.days_left === null ? "" : s.days_left >= 0 ? `${s.days_left} days left` : `${-s.days_left} days past the date`)}
+      ${monthly}
+      ${statTile("Planned expenses", money(s.planned_total), `${money(s.paid_total)} paid`)}
+    </div>
+
+    <div class="mb-4 grid gap-4 lg:grid-cols-3">
+      ${goalExpensesHtml(goal)}
+      <div class="space-y-4">
+        ${goalBudgetsHtml(goal)}
+        <section class="panel">
+          <h3 class="mb-2 text-lg font-semibold">Plan</h3>
+          <p class="whitespace-pre-line text-sm ${goal.plan ? "" : "text-slate-500"}">${goal.plan ? escapeHtml(goal.plan) : "No plan written yet."}</p>
+          <details class="mt-3">
+            <summary class="cursor-pointer text-sm font-medium text-blue-600">Edit goal</summary>
+            <form data-form="edit-goal" novalidate class="mt-3 space-y-3">
+              <input name="name" type="text" maxlength="100" value="${escapeHtml(goal.name)}" aria-label="Name" class="input" />
+              <input name="target_amount" type="number" min="0.01" step="0.01" value="${goal.target_amount}" aria-label="Target amount" class="input" />
+              <input name="target_date" type="date" value="${goal.target_date || ""}" min="${goal.start_date}" aria-label="Target date" class="input" />
+              <textarea name="plan" rows="3" maxlength="2000" placeholder="Your plan" aria-label="Plan" class="input">${escapeHtml(goal.plan || "")}</textarea>
+              <button type="submit" class="btn-primary">Save changes</button>
+            </form>
+          </details>
+        </section>
+      </div>
+    </div>`;
+
+  $("goals-list-view").classList.add("hidden");
+  $("goal-detail").classList.remove("hidden");
+}
+
+function showGoalDetailError(message) {
+  const el = $("goal-detail-error");
+  if (!el) return;
+  el.textContent = message;
+  el.classList.toggle("hidden", !message);
+}
+
+// Run a goal mutation that returns the refreshed goal, then redraw the detail + list data.
+async function goalAction(request, errorTarget = showGoalDetailError) {
+  try {
+    const detail = await request();
+    errorTarget("");
+    // keep the list's summaries (and each goal's budget_ids) fresh for the back button
+    goalsState.goals = await api("/goals");
+    renderGoalDetail(detail);
+    return detail;
+  } catch (err) {
+    if (err.message !== "Unauthorized") errorTarget(err.message);
+    return null;
+  }
+}
+
+// ---- events ----
+
+$("new-goal-btn").addEventListener("click", () => {
+  const form = $("goal-form");
+  const show = form.classList.contains("hidden");
+  form.classList.toggle("hidden", !show);
+  form.classList.toggle("grid", show);
+  if (show) {
+    $("goal-start").value = todayIso();
+    showGoalFormError("");
+    $("goal-name").focus();
+  }
+});
+
+function closeGoalForm() {
+  $("goal-form").classList.add("hidden");
+  $("goal-form").classList.remove("grid");
+}
+$("goal-cancel").addEventListener("click", closeGoalForm);
+
+$("goal-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("goal-name").value.trim();
+  const target = $("goal-target").value;
+  const start = $("goal-start").value;
+  const deadline = $("goal-deadline").value;
+
+  if (!name) return showGoalFormError("Give the goal a name.");
+  if (!(Number(target) > 0)) return showGoalFormError("Enter a target amount greater than 0.");
+  if (!start) return showGoalFormError("Pick a start date.");
+  if (deadline && deadline < start) return showGoalFormError("The target date can't be before the start date.");
+
+  try {
+    const goal = await api("/goals", {
+      method: "POST",
+      json: {
+        name,
+        target_amount: target,
+        start_date: start,
+        target_date: deadline || null,
+        plan: $("goal-plan").value.trim() || null,
+      },
+    });
+    e.target.reset();
+    closeGoalForm();
+    goalsState.openId = goal.id;
+    await loadGoals(); // refreshes list data and opens the new goal
+  } catch (err) {
+    if (err.message !== "Unauthorized") showGoalFormError(err.message);
+  }
+});
+
+$("goal-list").addEventListener("click", async (e) => {
+  const card = e.target.closest("[data-open-goal]");
+  if (!card) return;
+  goalsState.openId = Number(card.dataset.openGoal);
+  await loadGoals();
+});
+
+$("goal-detail").addEventListener("click", async (e) => {
+  const id = goalsState.openId;
+  const action = e.target.closest("[data-action]")?.dataset.action;
+  const unassign = e.target.closest("[data-unassign-budget]");
+  const delExpense = e.target.closest("[data-delete-expense]");
+
+  if (action === "back") {
+    goalsState.openId = null;
+    return loadGoals();
+  }
+  if (action === "toggle-achieved") {
+    const achieved = !goalsState.goals.find((g) => g.id === id)?.is_achieved;
+    return goalAction(() => api(`/goals/${id}`, { method: "PATCH", json: { is_achieved: achieved } }));
+  }
+  if (action === "delete-goal") {
+    if (!confirm("Delete this goal and its expense plan? Your budgets are kept.")) return;
+    try {
+      await api(`/goals/${id}`, { method: "DELETE" });
+      goalsState.openId = null;
+      await loadGoals();
+    } catch (err) {
+      if (err.message !== "Unauthorized") showGoalDetailError(err.message);
+    }
+    return;
+  }
+  if (unassign) {
+    return goalAction(() => api(`/goals/${id}/budgets/${unassign.dataset.unassignBudget}`, { method: "DELETE" }));
+  }
+  if (delExpense) {
+    if (!confirm("Delete this expense from the plan?")) return;
+    return goalAction(() => api(`/goals/${id}/expenses/${delExpense.dataset.deleteExpense}`, { method: "DELETE" }));
+  }
+});
+
+// Ticking an expense as paid
+$("goal-detail").addEventListener("change", (e) => {
+  const box = e.target.closest("[data-paid-expense]");
+  if (!box) return;
+  goalAction(() =>
+    api(`/goals/${goalsState.openId}/expenses/${box.dataset.paidExpense}`, {
+      method: "PATCH",
+      json: { is_paid: box.checked },
+    })
+  );
+});
+
+$("goal-detail").addEventListener("submit", async (e) => {
+  const form = e.target.closest("form[data-form]");
+  if (!form) return;
+  e.preventDefault();
+  const id = goalsState.openId;
+  const kind = form.dataset.form;
+  const f = form.elements;
+
+  if (kind === "assign-budget") {
+    return goalAction(() =>
+      api(`/goals/${id}/budgets`, { method: "POST", json: { budget_id: Number(f.budget_id.value) } })
+    );
+  }
+
+  if (kind === "add-expense") {
+    const errorEl = form.querySelector("[data-error=expense]");
+    const showError = (m) => {
+      errorEl.textContent = m;
+      errorEl.classList.toggle("hidden", !m);
+    };
+    const description = f.description.value.trim();
+    if (!description) return showError("Enter what the expense is.");
+    if (!(Number(f.amount.value) > 0)) return showError("Enter an amount greater than 0.");
+    return goalAction(
+      () =>
+        api(`/goals/${id}/expenses`, {
+          method: "POST",
+          json: {
+            description,
+            amount: f.amount.value,
+            planned_date: f.planned_date.value || null,
+            notes: f.notes.value.trim() || null,
+          },
+        }),
+      showError // a server rule (e.g. date after the target date) shows next to the form
+    );
+  }
+
+  if (kind === "edit-goal") {
+    const name = f.name.value.trim();
+    if (!name) return showGoalDetailError("The goal needs a name.");
+    if (!(Number(f.target_amount.value) > 0)) return showGoalDetailError("Enter a target amount greater than 0.");
+    return goalAction(() =>
+      api(`/goals/${id}`, {
+        method: "PATCH",
+        json: {
+          name,
+          target_amount: f.target_amount.value,
+          target_date: f.target_date.value || null,
+          plan: f.plan.value.trim() || null,
+        },
+      })
+    );
   }
 });
 

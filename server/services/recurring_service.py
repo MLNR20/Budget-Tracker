@@ -1,12 +1,11 @@
-from datetime import date, datetime, timedelta
+from datetime import timedelta
 from typing import Sequence
-from zoneinfo import ZoneInfo
 
-from config import APP_TIMEZONE
 from entities.recurring_transaction import RecurringTransaction
 from entities.transaction import Transaction
 from repositories import RecurringTransactionRepository
 from schemas.recurring import RecurringCreate, RecurringUpdate
+from services.clock import local_today
 from services.exceptions import BusinessRuleError, NotFoundError
 from services.recurrence import nth_occurrence, occurrence_datetime
 
@@ -14,10 +13,6 @@ from services.recurrence import nth_occurrence, occurrence_datetime
 MAX_BACKFILL_DAYS = 366
 # Safety cap per rule per catch-up run (the backfill limit above already keeps real use far below).
 MAX_PER_RULE_RUN = 400
-
-
-def local_today() -> date:
-    return datetime.now(ZoneInfo(APP_TIMEZONE)).date()
 
 
 class RecurringTransactionService:

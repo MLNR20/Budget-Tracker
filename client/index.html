@@ -128,6 +128,11 @@
             <i class="bi bi-arrow-repeat text-base"></i>
             <span class="group-data-[collapsed=true]:hidden">Recurring</span>
           </button>
+          <button type="button" data-view="goals" title="Goals"
+            class="nav-item flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium group-data-[collapsed=true]:justify-center">
+            <i class="bi bi-bullseye text-base"></i>
+            <span class="group-data-[collapsed=true]:hidden">Goals</span>
+          </button>
           <button type="button" data-view="budgets" title="Budgets"
             class="nav-item flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium group-data-[collapsed=true]:justify-center">
             <i class="bi bi-piggy-bank text-base"></i>
@@ -149,7 +154,7 @@
         <div class="mx-auto max-w-6xl px-4 py-6">
 
           <!-- Dashboard -->
-          <section id="view-dashboard" class="hidden">
+          <section id="view-dashboard" class="hidden p-2">
             <h2 class="mb-4 text-2xl font-semibold">Dashboard</h2>
 
             <div class="mb-6 grid gap-4 md:grid-cols-3">
@@ -406,6 +411,56 @@
             <p id="recurring-info" class="mb-4 hidden rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700" role="status"></p>
             <ul id="recurring-list" class="space-y-3"></ul>
             <p id="recurring-empty" class="panel hidden text-center text-slate-500">No recurring transactions yet.</p>
+          </section>
+
+          <!-- Goals: save for something. Assign budgets, plan expenses with dates, see the savings plan -->
+          <section id="view-goals" class="hidden">
+            <!-- list of goals -->
+            <div id="goals-list-view">
+              <div class="mb-4 flex items-center justify-between">
+                <h2 class="text-2xl font-semibold">Goals</h2>
+                <button id="new-goal-btn" type="button" class="btn-primary">
+                  <i class="bi bi-plus-lg mr-1"></i>New goal
+                </button>
+              </div>
+
+              <form id="goal-form" novalidate class="panel mb-6 hidden gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <div class="sm:col-span-2">
+                  <label for="goal-name" class="label">Goal</label>
+                  <input id="goal-name" type="text" maxlength="100" placeholder="e.g. Trip to Japan" class="input" />
+                </div>
+                <div>
+                  <label for="goal-target" class="label">Target amount</label>
+                  <input id="goal-target" type="number" min="0.01" step="0.01" placeholder="0.00" class="input" />
+                </div>
+                <div>
+                  <label for="goal-start" class="label">Starts</label>
+                  <input id="goal-start" type="date" class="input" />
+                </div>
+                <div>
+                  <label for="goal-deadline" class="label">Target date <span class="font-normal text-slate-400">(optional)</span></label>
+                  <input id="goal-deadline" type="date" class="input" />
+                </div>
+                <div class="sm:col-span-2 lg:col-span-3">
+                  <label for="goal-plan" class="label">Plan <span class="font-normal text-slate-400">(optional)</span></label>
+                  <textarea id="goal-plan" rows="2" maxlength="2000" placeholder="How will you reach it?" class="input"></textarea>
+                </div>
+                <p id="goal-form-error" class="hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 sm:col-span-2 lg:col-span-4" role="alert"></p>
+                <div class="flex gap-2 sm:col-span-2 lg:col-span-4">
+                  <button type="submit" class="btn-primary">Create goal</button>
+                  <button id="goal-cancel" type="button" class="btn-secondary">Cancel</button>
+                </div>
+              </form>
+
+              <p id="goals-error" class="mb-4 hidden rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700" role="alert"></p>
+              <div id="goal-list" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"></div>
+              <p id="goals-empty" class="panel hidden text-center text-slate-500">
+                No goals yet. Create one, assign a budget to it, and plan its expenses.
+              </p>
+            </div>
+
+            <!-- one goal (filled in by app.js) -->
+            <div id="goal-detail" class="hidden"></div>
           </section>
 
           <!-- Budgets (talks to the protected API) -->

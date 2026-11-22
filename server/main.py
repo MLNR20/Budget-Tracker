@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from database import init_db
-from routers import analytics, auth, budgets, cards, recurring, transactions, users
+from routers import analytics, auth, budgets, cards, goals, recurring, transactions, users
 from services import AuthenticationError, BusinessRuleError, NotFoundError
 
 
@@ -51,6 +51,7 @@ app.include_router(budgets.router)
 app.include_router(cards.router)
 app.include_router(transactions.router)
 app.include_router(recurring.router)
+app.include_router(goals.router)
 app.include_router(analytics.router)
 
 

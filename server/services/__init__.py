@@ -8,6 +8,7 @@ from services.exceptions import (
     NotFoundError,
     ServiceError,
 )
+from services.goal_service import GoalService
 from services.recurring_service import RecurringTransactionService
 from services.transaction_service import TransactionService
 
@@ -18,6 +19,7 @@ __all__ = [
     "BudgetService",
     "BusinessRuleError",
     "CardService",
+    "GoalService",
     "NotFoundError",
     "RecurringTransactionService",
     "ServiceError",
